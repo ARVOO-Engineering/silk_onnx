@@ -173,6 +173,20 @@ class SiLKVGG(SiLKBase):
             normalize_descriptors=normalize_descriptors,
         )
 
+    def to_onnx(self, file_path: str, dummy_input: torch.Tensor, export_params: bool = True):
+        import torch.onnx
+
+        torch.onnx.export(
+            self,
+            dummy_input,
+            file_path,
+            export_params=export_params,
+            opset_version=20,
+            do_constant_folding=True,
+            input_names=["images"],
+            output_names=["logits", "raw_descriptors"],
+        )
+
     @staticmethod
     def add_descriptor_head_post_processing(
         flow: Flow,
@@ -268,7 +282,6 @@ class SiLKVGG(SiLKBase):
 
             sparse_descriptors.append(descriptors)
         return tuple(sparse_descriptors)
-
 
 class SiLKLoFTR(SiLKBase):
     def __init__(

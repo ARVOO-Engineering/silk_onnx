@@ -22,8 +22,10 @@ from silk.losses.info_nce import (
 )
 from silk.matching.mnn import (
     compute_dist,
+    compute_dst_np,
     double_softmax_distance,
     match_descriptors,
+    match_descriptors_np,
     mutual_nearest_neighbor,
 )
 from silk.models.abstract import OptimizersHandler, StateDictRedirect
@@ -48,6 +50,13 @@ def matcher(
             mutual_nearest_neighbor,
             match_fn=partial(match_descriptors, max_ratio=threshold),
             distance_fn=partial(compute_dist, dist_type="cosine"),
+            return_distances=return_distances,
+        )
+    elif postprocessing == "ratio-test-cpu":
+        return partial(
+            mutual_nearest_neighbor,
+            match_fn=partial(match_descriptors_np, max_ratio=threshold),
+            distance_fn=partial(compute_dst_np),
             return_distances=return_distances,
         )
     elif postprocessing == "double-softmax":

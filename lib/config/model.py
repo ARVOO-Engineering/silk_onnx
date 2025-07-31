@@ -24,7 +24,6 @@ def load_model_from_checkpoint(  # noqa: C901
     state_dict_fn: Optional[Callable[[Any], Any]] = None,
 ):
     checkpoint = pl_load(checkpoint_path, device)
-
     if isinstance(model, pl.LightningModule):
         model.on_load_checkpoint(checkpoint)
 

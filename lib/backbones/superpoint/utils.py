@@ -113,15 +113,25 @@ def prob_map_to_points_map(
             top_k = torch.tensor(top_k, device=prob_map.device)
             reshaped_prob_map = prob_map.reshape(prob_map.shape[0], -1)
 
-            top_k_percentile = (
-                reshaped_prob_map[0].size()[0] - top_k - 1
-            ) / reshaped_prob_map[0].size()[0]
+            sorted_probs, _ = torch.sort(reshaped_prob_map, dim=1)
 
-            top_k_threshold = reshaped_prob_map.quantile(
-                top_k_percentile,
-                dim=1,
-                interpolation="midpoint",
-            )
+            # Find the index for the threshold
+            threshold_idx = reshaped_prob_map.shape[1] - top_k - 1
+            threshold_idx = max(threshold_idx, 0)  # Ensure non-negative
+
+            # Gather the threshold value for each batch
+            top_k_threshold = sorted_probs[:, threshold_idx]
+
+
+            # top_k_percentile = (
+            #     reshaped_prob_map[0].size()[0] - top_k - 1
+            # ) / reshaped_prob_map[0].size()[0]
+
+            # top_k_threshold = reshaped_prob_map.quantile(
+            #     top_k_percentile,
+            #     dim=1,
+            #     interpolation="midpoint",
+            # )
         prob_thresh = torch.minimum(top_k_threshold, prob_thresh)
         prob_thresh = prob_thresh.unsqueeze(-1).unsqueeze(-1)
 
