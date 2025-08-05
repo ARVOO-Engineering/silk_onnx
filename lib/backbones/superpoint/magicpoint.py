@@ -209,7 +209,7 @@ class MagicPoint(AutoForward, torch.nn.Module):
             f"{prefix}probability",
         )
         flow.define_transition(
-            f"{prefix}nms",
+            f"{prefix}positions",
             partial(
                 prob_map_to_points_map,
                 prob_thresh=detection_threshold,
@@ -217,10 +217,6 @@ class MagicPoint(AutoForward, torch.nn.Module):
                 border_dist=border_dist,
                 top_k=detection_top_k,
             ),
-            f"{prefix}score",
+            f"{prefix}score", f"{prefix}mask"
         )
-        flow.define_transition(
-            f"{prefix}positions",
-            prob_map_to_positions_with_prob,
-            f"{prefix}nms",
-        )
+        

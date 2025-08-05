@@ -79,6 +79,7 @@ def depth_to_space(
 
 def prob_map_to_points_map(
     prob_map: torch.Tensor,
+    mask: torch.Tensor,
     prob_thresh: float = 0.015,
     nms_dist: int = 4,
     border_dist: int = 4,
@@ -86,6 +87,8 @@ def prob_map_to_points_map(
     top_k: int = None,
 ):
     prob_map = remove_border_points(prob_map, border_dist=border_dist)
+    prob_map = remove_mask_points(prob_map, mask)
+
 
     prob_map = prob_map.squeeze(dim=1)
 
@@ -105,44 +108,29 @@ def prob_map_to_points_map(
             [original_nms(image, nms_dist=nms_dist) for image in prob_map]
         )
 
-    if top_k:
-        if top_k >= prob_map.shape[-1] * prob_map.shape[-2]:
-            top_k_threshold = torch.zeros_like(prob_thresh)
-        else:
-            # infer top k threshold
-            top_k = torch.tensor(top_k, device=prob_map.device)
-            reshaped_prob_map = prob_map.reshape(prob_map.shape[0], -1)
+    # infer top k threshold
 
-            sorted_probs, _ = torch.sort(reshaped_prob_map, dim=1)
-
-            # Find the index for the threshold
-            threshold_idx = reshaped_prob_map.shape[1] - top_k - 1
-            threshold_idx = max(threshold_idx, 0)  # Ensure non-negative
-
-            # Gather the threshold value for each batch
-            top_k_threshold = sorted_probs[:, threshold_idx]
-
-
-            # top_k_percentile = (
-            #     reshaped_prob_map[0].size()[0] - top_k - 1
-            # ) / reshaped_prob_map[0].size()[0]
-
-            # top_k_threshold = reshaped_prob_map.quantile(
-            #     top_k_percentile,
-            #     dim=1,
-            #     interpolation="midpoint",
-            # )
-        prob_thresh = torch.minimum(top_k_threshold, prob_thresh)
-        prob_thresh = prob_thresh.unsqueeze(-1).unsqueeze(-1)
-
-    # only take points with probability above the probability threshold
-    prob_map = torch.where(
-        prob_map > prob_thresh,
-        prob_map,
-        torch.tensor(0.0, device=prob_map.device),
+    # reshaped_prob_map = prob_map.reshape(prob_map.shape[0], -1)
+    values, indices = torch.topk(
+        prob_map.reshape(prob_map.shape[0], -1),
+        k=top_k,
+        dim=1,
+        largest=True,
+        sorted=True,
     )
 
-    return prob_map  # batch_output
+    # map the top_k values to a 2 dimensional shape (first dimension is batch) with value [x, y, value]
+
+    positions = torch.stack(
+        (indices // prob_map.shape[-1], indices - (indices // prob_map.shape[-1]) * prob_map.shape[-1]), dim=2
+    ).float() + 0.5
+    
+    positions_with_prob = tuple(
+        torch.cat((pos, prob.unsqueeze(1)), dim=1) for pos, prob in zip(positions, values)
+    )
+
+
+    return positions_with_prob  # batch_output
 
 
 def remove_border_points(image_nms: torch.Tensor, border_dist: int = 4) -> torch.Tensor:
@@ -170,6 +158,35 @@ def remove_border_points(image_nms: torch.Tensor, border_dist: int = 4) -> torch
 
         # bottom rows
         image_nms[..., -border_dist:, :] = 0.0
+
+    return image_nms
+
+
+def remove_mask_points(image_nms: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """
+    Remove predicted points in a specific area of the image.
+
+    Args:
+        image_nms (tensor): the output of the nms function, a tensor of shape
+            (img_height, img_width) with corner probability values at each pixel location
+        mask (tensor): a binary mask of the same shape as image_nms, where 1 indicates
+            the area to keep and 0 indicates the area to remove
+
+    Returns:
+        image_nms (tensor): the image with all probability values equal to 0.0
+            for pixel locations within the specified area
+    """
+    # The image will have a different height and width due to the convolutional layers,
+    # so we need to make sure the mask is the same shape as the image, removing the outer pixels until they match
+    # note that the image has shape [1,1,H,W] and the mask has shape [1,1,H,W]
+    difference = int((mask.shape[2] - image_nms.shape[2]) / 2)
+    mask = mask[
+        ...,
+        difference : mask.shape[-2] - difference,
+        difference : mask.shape[-1] - difference,
+    ]
+    
+    image_nms = image_nms.masked_fill(mask == 0, 0.0)
 
     return image_nms
 

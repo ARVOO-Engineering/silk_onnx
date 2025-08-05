@@ -186,20 +186,25 @@ def matcher(
     )
 SILK_MATCHER_CPU = matcher(postprocessing="ratio-test-cpu", threshold=0.6)
 
-
 def load_images(*paths):
     imagescv2 = [cv2.imread(path, cv2.IMREAD_GRAYSCALE) for path in paths]
     imagescv2 = [cv2.resize(image, (640, 480)) for image in imagescv2]  # resize to a common size
     imagescv2 = np.stack(imagescv2)
     # map to 0:1 range
     imagescv2 = imagescv2.astype(np.float32) / 255.0
-
-    # images = np.stack([cv2.imread(path, cv2.IMREAD_GRAYSCALE if as_gray else cv2.IMREAD_COLOR) for path in paths])
-    # images = torch.tensor(imagescv2, device=DEVICE, dtype=torch.float32)
-
-    # images = images.unsqueeze(1)  # add channel dimension
+    
     images = np.expand_dims(imagescv2, axis=1)  # add channel dimension
     return images
+
+def load_mask():
+        # set mask to all ones except for where the bounding boxes are
+    example_mask = np.ones((480, 640), dtype=np.float32)
+    example_mask[0:400, 0:400] = 0.0
+    example_mask = np.array(example_mask, dtype=np.float32)
+    example_mask = np.expand_dims(example_mask, axis=0)
+    example_mask = np.expand_dims(example_mask, axis=0)
+    return example_mask
+
 
 IMAGE_0_PATH = "color1.jpg"
 IMAGE_1_PATH = "color3.jpg"
@@ -208,30 +213,28 @@ OUTPUT_IMAGE_PATH = "./img.png"
 
 def main():
     # load image
+    import time
+    start_time = time.time()
+    
     images_0 = load_images(IMAGE_0_PATH)
     images_1 = load_images(IMAGE_1_PATH)
+    mask = load_mask()
+    print("--- %s seconds ---" % (time.time() - start_time))
 
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     network = ort.InferenceSession(
         "model.onnx", sess_options=so, providers=["CPUExecutionProvider"]
     )
+    print("--- %s seconds ---" % (time.time() - start_time))
 
-    # height, width = network.get_inputs()[0].shape[2:]
-    # dtype = np.float16 if "float16" in network.get_inputs()[0].type else np.float32
-    # batch_size = 1  # set batch size for inference
-    # width_ratio: float = 640 / width
-    # height_ratio: float = 480 / height
-    # ratio = None
-    # if width_ratio == height_ratio:
-    #     ratio = width_ratio
     sparse_positions_0_onnx, sparse_descriptors_0_onnx = network.run(
-        output_names=["logits", "raw_descriptors"],
-        input_feed={"images": images_0},
+        output_names=["sparse_positions", "sparse_descriptors"],
+        input_feed={"images": images_0, "mask": mask},
     )
     sparse_positions_1_onnx, sparse_descriptors_1_onnx = network.run(
-        output_names=["logits", "raw_descriptors"],
-        input_feed={"images": images_1},
+        output_names=["sparse_positions", "sparse_descriptors"],
+        input_feed={"images": images_1, "mask": mask},
     )
     matches = SILK_MATCHER_CPU(sparse_descriptors_0_onnx, sparse_descriptors_1_onnx)
 

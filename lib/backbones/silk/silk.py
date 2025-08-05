@@ -53,6 +53,7 @@ class SiLKBase(AutoForward, torch.nn.Module):
         self,
         backbone,
         input_name: str = "images",
+        mask_name: str = "mask",
         backbone_output_name: Union[str, Tuple[str]] = "features",
         default_outputs: Union[str, Iterable[str]] = ("descriptors", "score"),
     ):
@@ -61,6 +62,7 @@ class SiLKBase(AutoForward, torch.nn.Module):
         self.backbone = SharedBackboneMultipleHeads(
             backbone=backbone,
             input_name=input_name,
+            mask_name=mask_name,
             backbone_output_name=backbone_output_name,
         )
 
@@ -173,19 +175,26 @@ class SiLKVGG(SiLKBase):
             normalize_descriptors=normalize_descriptors,
         )
 
-    def to_onnx(self, file_path: str, dummy_input: torch.Tensor, export_params: bool = True):
+    def to_onnx(self, file_path: str, dummy_input: torch.Tensor, dummy_mask_input, export_params: bool = True):
         import torch.onnx
+        import onnx
+        import onnxsim
 
         torch.onnx.export(
             self,
-            dummy_input,
+            (dummy_input, dummy_mask_input),
             file_path,
             export_params=export_params,
-            opset_version=20,
+            verbose=False,
+            opset_version=13,
             do_constant_folding=True,
-            input_names=["images"],
-            output_names=["logits", "raw_descriptors"],
+            input_names=["images", "mask"],
+            output_names=["sparse_positions", "sparse_descriptors"],
         )
+        onnx_model = onnx.load(file_path)  # load onnx model
+        onnx.checker.check_model(onnx_model)  # check onnx model
+        onnx_model, _ = onnxsim.simplify(onnx_model)  # simplify model
+        onnx.save(onnx_model, file_path)  # save simplified model
 
     @staticmethod
     def add_descriptor_head_post_processing(

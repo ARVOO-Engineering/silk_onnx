@@ -24,16 +24,18 @@ class SharedBackboneMultipleHeads(
         self,
         backbone,
         input_name: str,
+        mask_name: str,
         backbone_output_name: Union[str, Tuple[str]],
     ) -> None:
         torch.nn.Module.__init__(self)
         AutoForward.__init__(
             self,
-            Flow(input_name),
+            Flow(input_name, mask_name),
             default_outputs=backbone_output_name,
         )
 
         self._input_name = input_name
+        self._mask_name = mask_name
         self._backbone_output_name = backbone_output_name
         self._backbone = backbone
 

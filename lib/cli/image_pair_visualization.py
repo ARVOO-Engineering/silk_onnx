@@ -50,6 +50,7 @@ def create_img_pair_visual(
     img_width,
     matched_keypoints,
     matched_warped_keypoints,
+    coordinate_mapping=[9, 9],
 ):
     # load in images of shape (img_height, img_width)
     image1 = cv2.imread(image1)
@@ -69,6 +70,7 @@ def create_img_pair_visual(
         image2,
         matched_keypoints,
         matched_warped_keypoints,
+        coordinate_mapping
     )
 
 
@@ -77,6 +79,7 @@ def img_pair_visual(
     image2,
     matched_keypoints,
     matched_warped_keypoints,
+    coordinate_mapping,
     good_matches_mask=None,
 ):
     img_width = image1.shape[1]
@@ -101,7 +104,9 @@ def img_pair_visual(
     # draw matched keypoint points and lines associating matched keypoints (point correspondences)
     for i in range(len(matched_keypoints)):
         img1_coords = matched_keypoints[i]
+        img1_coords = (img1_coords[0] + coordinate_mapping[0], img1_coords[1] + coordinate_mapping[1])
         img2_coords = matched_warped_keypoints[i]
+        img2_coords = (img2_coords[0] + coordinate_mapping[0], img2_coords[1] + coordinate_mapping[1])
         # add the width so the coordinates show up correctly on the second image
         img2_coords = (img2_coords[0] + img_width, img2_coords[1])
 
