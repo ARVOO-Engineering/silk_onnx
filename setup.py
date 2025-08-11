@@ -17,7 +17,7 @@ setup(
     description="[FAIR] SiLK - Simple Learned Keypoints",
     author="Pierre Gleize, Weiyao Wang, Matt Feiszli",
     author_email="gleize@meta.com",
-    url="https://github.com/facebookresearch/silk",
+    url="https://github.com/luukvnes/silk_onnx",
     packages=["silk"],
     install_requires=load_requirements("requirements.txt"),
 )

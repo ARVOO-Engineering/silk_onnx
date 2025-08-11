@@ -25,6 +25,8 @@ from silk.backbones.superpoint.superpoint import (
 )
 from silk.flow import AutoForward, Flow
 from silk.models.superpoint_utils import get_dense_positions
+import torch.nn.functional as F
+
 
 
 def from_feature_coords_to_image_coords(model, desc_positions):
@@ -53,6 +55,7 @@ class SiLKBase(AutoForward, torch.nn.Module):
         self,
         backbone,
         input_name: str = "images",
+        mask_name: str = "mask",
         backbone_output_name: Union[str, Tuple[str]] = "features",
         default_outputs: Union[str, Iterable[str]] = ("descriptors", "score"),
     ):
@@ -61,6 +64,7 @@ class SiLKBase(AutoForward, torch.nn.Module):
         self.backbone = SharedBackboneMultipleHeads(
             backbone=backbone,
             input_name=input_name,
+            mask_name=mask_name,
             backbone_output_name=backbone_output_name,
         )
 
@@ -173,6 +177,32 @@ class SiLKVGG(SiLKBase):
             normalize_descriptors=normalize_descriptors,
         )
 
+        SiLKVGG.add_matcher_post_processing(
+            self.flow,
+            matcher_output_name="matches",
+        )
+
+    def to_onnx(self, file_path: str, dummy_input: torch.Tensor, dummy_mask_input, export_params: bool = True):
+        import torch.onnx
+        import onnx
+        import onnxsim
+
+        torch.onnx.export(
+            self,
+            (dummy_input, dummy_mask_input),
+            file_path,
+            export_params=export_params,
+            verbose=False,
+            opset_version=13,
+            do_constant_folding=True,
+            input_names=["images", "mask"],
+            output_names=["sparse_positions", "matches"],
+        )
+        onnx_model = onnx.load(file_path)  # load onnx model
+        onnx.checker.check_model(onnx_model)  # check onnx model
+        onnx_model, _ = onnxsim.simplify(onnx_model)  # simplify model
+        onnx.save(onnx_model, file_path)  # save simplified model
+
     @staticmethod
     def add_descriptor_head_post_processing(
         flow: Flow,
@@ -218,6 +248,108 @@ class SiLKVGG(SiLKBase):
             SiLKVGG.get_dense_positions,
             "probability",
         )
+
+    @staticmethod
+    def add_matcher_post_processing(
+        flow: Flow,
+        matcher_output_name: str = "matches",
+    ):
+        flow.define_transition(
+            'distance',
+            SiLKVGG.compute_dist,
+            "sparse_descriptors",
+        )
+
+        flow.define_transition(
+            matcher_output_name,
+            SiLKVGG.match_descriptors,
+            'distance',
+        )
+            
+        
+    
+    # def mutual_nearest_neighbor(
+    #     desc_0,
+    #     desc_1,
+    # ):
+    #     dist = distance_fn(desc_0, desc_1)
+    #     matches = match_fn(dist)
+    #     return matches
+
+    @staticmethod
+    def match_descriptors(
+        distances,
+        max_distance=torch.inf,
+        cross_check=True,
+        max_ratio=0.7,
+    ):
+            # Step 1: Prepare index1 (row indices)
+        indices1 = torch.arange(distances.shape[0], device=distances.device)
+
+        # Step 2: Get best match (argmin)
+        indices2 = torch.argmin(distances, dim=1)
+
+        # Step 3: Gather best distances
+        best_distances = torch.gather(distances, 1, indices2.unsqueeze(1)).squeeze(1)
+
+        # Step 4: Mask out best match by setting it to inf
+        distances_masked = distances.clone()
+        distances_masked.scatter_(1, indices2.unsqueeze(1), float("inf"))
+
+        # Step 5: Find second-best match
+        second_best_indices2 = torch.argmin(distances_masked, dim=1)
+        second_best_distances = torch.gather(distances_masked, 1, second_best_indices2.unsqueeze(1)).squeeze(1)
+
+        # Step 6: Avoid divide-by-zero
+        epsilon = torch.finfo(best_distances.dtype).eps
+        safe_second_best = torch.where(second_best_distances == 0, torch.tensor(epsilon, device=distances.device), second_best_distances)
+
+        # Step 7: Compute Lowe's ratio
+        ratio = best_distances / safe_second_best
+        mask_ratio = ratio < max_ratio
+
+        # Step 8: Apply Lowe's ratio filter
+        invalid = torch.full_like(indices1, -1)
+        indices1 = torch.where(mask_ratio, indices1, invalid)
+        indices2 = torch.where(mask_ratio, indices2, invalid)
+
+        # Step 9: Cross-check filter
+        if cross_check:
+            # Find best match from descriptors2 back to descriptors1
+            matches1 = torch.argmin(distances, dim=0)  # [N2] => indices in descriptors1
+
+            # matches1[indices2] should equal indices1 (only valid if not -1)
+            valid_check = (indices2 >= 0) & (matches1[indices2] == indices1)
+            indices1 = torch.where(valid_check, indices1, invalid)
+            indices2 = torch.where(valid_check, indices2, invalid)
+
+        matches = torch.stack((indices1, indices2), dim=1)
+        return (matches, matches)
+    @staticmethod        
+    def compute_dist(descriptors):
+        ''' Compute distance between two sets of descriptors.'''
+        assert len(descriptors) == 2, "Descriptors should be a tuple of two sets of descriptors."
+        # assert dist_type in {"dot", "cosine", "l2"}
+
+        # if dist_type == "dot":
+        #     distance = 1 - torch.matmul(desc_0, desc_1.T)
+        # elif dist_type == "cosine":
+        desc_0 = F.normalize(
+            descriptors[0],
+            p=2,
+            dim=1,
+        )
+        desc_1 = F.normalize(
+            descriptors[1],
+            p=2,
+            dim=1,
+        )
+        distance = 1 - torch.matmul(desc_0, desc_1.T)
+        # elif dist_type == "l2":
+        #     distance = torch.cdist(desc_0, desc_1, p=2)
+
+        return distance
+
 
     @staticmethod
     def get_dense_positions(probability):
@@ -268,7 +400,6 @@ class SiLKVGG(SiLKBase):
 
             sparse_descriptors.append(descriptors)
         return tuple(sparse_descriptors)
-
 
 class SiLKLoFTR(SiLKBase):
     def __init__(
