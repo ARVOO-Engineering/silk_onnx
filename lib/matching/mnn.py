@@ -261,6 +261,31 @@ def estimate_homography(
         matched_points_1,
     )
 
+def estimate_homography_matched(
+    points_0,
+    points_1,
+    matches,
+    matcher_fn=mutual_nearest_neighbor,
+    homography_solver_fn=ransac_confidence,
+    ordering="xy",
+):
+    assert ordering in {"xy", "yx"}
+
+    matched_points_0 = points_0[matches[:, 0]]
+    matched_points_1 = points_1[matches[:, 1]]
+
+    estimated_homography = homography_solver_fn(
+        matched_points_0[:, :2],
+        matched_points_1[:, :2],
+        ordering,
+    )
+
+    return (
+        estimated_homography,
+        matched_points_0,
+        matched_points_1,
+    )
+
 
 def batched_estimate_homography(
     points_0,

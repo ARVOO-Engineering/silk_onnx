@@ -9,6 +9,8 @@ import itertools
 from heapq import heapify, heappop, heappush
 from typing import Iterable, List, Set, Tuple, Union
 
+import torch
+
 
 class _Transition:
     def __init__(self, dependencies) -> None:
@@ -213,7 +215,7 @@ class Flow:
 
         if isinstance(output_indexes, int):
             return session[output_indexes]
-        return tuple(session[index] for index in output_indexes)
+        return tuple(torch.stack(session[index]) for index in output_indexes)
 
     def names_to_indexes(self, names):
         if isinstance(names, str):

@@ -216,8 +216,7 @@ def main():
     import time
     start_time = time.time()
     
-    images_0 = load_images(IMAGE_0_PATH)
-    images_1 = load_images(IMAGE_1_PATH)
+    images_0 = load_images(IMAGE_0_PATH, IMAGE_1_PATH)
     mask = load_mask()
     print("--- %s seconds ---" % (time.time() - start_time))
 
@@ -228,20 +227,16 @@ def main():
     )
     print("--- %s seconds ---" % (time.time() - start_time))
 
-    sparse_positions_0_onnx, sparse_descriptors_0_onnx = network.run(
+    sparse_positions, sparse_descriptors = network.run(
         output_names=["sparse_positions", "sparse_descriptors"],
         input_feed={"images": images_0, "mask": mask},
     )
-    sparse_positions_1_onnx, sparse_descriptors_1_onnx = network.run(
-        output_names=["sparse_positions", "sparse_descriptors"],
-        input_feed={"images": images_1, "mask": mask},
-    )
-    matches = SILK_MATCHER_CPU(sparse_descriptors_0_onnx, sparse_descriptors_1_onnx)
+    matches = SILK_MATCHER_CPU(sparse_descriptors[0], sparse_descriptors[1])
 
 
     estimated_homography, mask = cv2.findHomography(
-        sparse_positions_0_onnx[matches[:, 0]][:, :2],
-        sparse_positions_1_onnx[matches[:, 1]][:, :2],
+        sparse_positions[0][matches[:, 0]][:, :2],
+        sparse_positions[1][matches[:, 1]][:, :2],
         cv2.RANSAC,
     )
     num_inliers = int(np.sum(mask))
@@ -260,8 +255,8 @@ def main():
         IMAGE_1_PATH,
         480,
         640,
-        sparse_positions_0_onnx[matches[:, 0]],
-        sparse_positions_1_onnx[matches[:, 1]],
+        sparse_positions[0][matches[:, 0]],
+        sparse_positions[1][matches[:, 1]],
     )
 
     save_image(

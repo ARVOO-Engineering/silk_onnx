@@ -11,6 +11,7 @@ import numpy as np
 import cv2
 import torch
 
+from lib.matching.mnn import estimate_homography_matched
 from silk.backbones.silk.silk import SiLKVGG as SiLK
 from silk.backbones.superpoint.superpoint import SuperPoint
 from silk.backbones.superpoint.vgg import ParametricVGG
@@ -33,7 +34,7 @@ DEVICE = "cuda:0"
 SILK_NMS = 0  # NMS radius, 0 = disabled
 SILK_BORDER = 0  # remove detection on border, 0 = disabled
 SILK_THRESHOLD = 1.0  # keypoint score thresholding, if # of keypoints is less than provided top-k, then will add keypoints to reach top-k value, 1.0 = disabled
-SILK_TOP_K = 1000  # minimum number of best keypoints to output, could be higher if threshold specified above has low value
+SILK_TOP_K = 1600  # minimum number of best keypoints to output, could be higher if threshold specified above has low value
 SILK_DEFAULT_OUTPUT = (  # outputs required when running the model
     "dense_positions",
     "normalized_descriptors",
@@ -72,7 +73,7 @@ def load_model(model, checkpoint, topk, threshold):
             "padding": 0,
             "border_dist": 0,
             "descriptor_scale_factor": 1.41,  # sqrt(2)
-            "default_outputs": ("sparse_positions", "sparse_descriptors"),
+            "default_outputs": ("sparse_positions", "matches"),
         }
         # default VGG backbone
         # ref : etc/backbones/silk-pvgg-defaults.yaml
@@ -173,7 +174,7 @@ def load_model(model, checkpoint, topk, threshold):
 
 def load_images(*paths, as_gray=True):
     imagescv2 = [cv2.imread(path, cv2.IMREAD_GRAYSCALE if as_gray else cv2.IMREAD_COLOR) for path in paths]
-    imagescv2 = [cv2.resize(image, (640, 480)) for image in imagescv2]  # resize to a common size
+    imagescv2 = [cv2.resize(image, (360, 202)) for image in imagescv2]  # resize to a common size
     imagescv2 = np.stack(imagescv2)
     # map to 0:1 range
     imagescv2 = imagescv2.astype(np.float32) / 255.0
@@ -190,8 +191,8 @@ def load_images(*paths, as_gray=True):
 
 def load_mask():
     # set mask to all ones except for where the bounding boxes are
-    example_mask = np.ones((480, 640), dtype=np.float32)
-    example_mask[0:400, 0:400] = 0.0
+    example_mask = np.ones((202, 360), dtype=np.float32)
+    example_mask[0:80, 120:250] = 0.0
     example_mask = torch.tensor(example_mask, device=DEVICE, dtype=torch.float32)
     example_mask = example_mask.unsqueeze(0).unsqueeze(0)  # add batch and channel dimensions
     return example_mask
@@ -233,8 +234,7 @@ OUTPUT_IMAGE_PATH2 = "./img2.png"
 
 def main():
     # load image
-    images_0 = load_images(IMAGE_0_PATH)
-    images_1 = load_images(IMAGE_1_PATH)
+    images_0 = load_images(IMAGE_0_PATH, IMAGE_1_PATH)
 
     mask = load_mask()
 
@@ -245,23 +245,19 @@ def main():
 
 
     # run model
-    sparse_positions_0, sparse_descriptors_0 = model(images_0, mask)
-    sparse_positions_1, sparse_descriptors_1 = model(images_1, mask)
-
-    # sparse_positions_0 = from_feature_coords_to_image_coords(model, sparse_positions_0)
-    # sparse_positions_1 = from_feature_coords_to_image_coords(model, sparse_positions_1)
-
+    sparse_positions, matches = model(images_0, mask)
     # get matches
-    matches = SILK_MATCHER(sparse_descriptors_0[0], sparse_descriptors_1[0])
-
+    matches: np.ndarray = matches[0].detach().cpu().numpy()  # get the first batch of matches
+    matches = matches[matches[:, 0] >= 0]  # filter out invalid matches
+    
     # create output image
     image_pair = create_img_pair_visual(
         IMAGE_0_PATH,
         IMAGE_1_PATH,
+        269,
         480,
-        640,
-        sparse_positions_0[0][matches[:, 0]].detach().cpu().numpy(),
-        sparse_positions_1[0][matches[:, 1]].detach().cpu().numpy(),
+        sparse_positions[0][matches[:, 0]].detach().cpu().numpy(),
+        sparse_positions[1][matches[:, 1]].detach().cpu().numpy(),
     )
 
     save_image(
@@ -269,36 +265,32 @@ def main():
         os.path.dirname(OUTPUT_IMAGE_PATH),
         os.path.basename(OUTPUT_IMAGE_PATH),
     )
-    estimate_homography(sparse_positions_0[0], sparse_positions_1[0], sparse_descriptors_0[0], sparse_descriptors_1[0])
+    estimate_homography_matched(sparse_positions[0], sparse_positions[1], matches)
 
-
-    model = model
-
-    print(f"result saved in {OUTPUT_IMAGE_PATH}")
-    print("done")
     model.to_onnx("model.onnx", images_0, mask, export_params=True)
     ort.set_default_logger_severity(3)  # set ONNX Runtime logger to warning level
     so = ort.SessionOptions()
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     network = ort.InferenceSession(
-        "model.onnx", sess_options=so, providers=["CPUExecutionProvider"]
+        "model.onnx", sess_options=so, providers=["CUDAExecutionProvider"]
     )
 
-    sparse_positions_0_onnx, sparse_descriptors_0_onnx = network.run(
-        output_names=["sparse_positions", "sparse_descriptors"],
+    sparse_positions_onnx, matches = network.run(
+        output_names=["sparse_positions", "matches"],
         input_feed={"images": images_0.detach().cpu().numpy(), "mask": mask.detach().cpu().numpy()},
     )
-    sparse_positions_1_onnx, sparse_descriptors_1_onnx = network.run(
-        output_names=["sparse_positions", "sparse_descriptors"],
-        input_feed={"images": images_1.detach().cpu().numpy(), "mask": mask.detach().cpu().numpy()},
-    )
+    # sparse_positions_1_onnx, sparse_descriptors_1_onnx = network.run(
+    #     output_names=["sparse_positions", "sparse_descriptors"],
+    #     input_feed={"images": images_1.detach().cpu().numpy(), "mask": mask.detach().cpu().numpy()},
+    # )
     
-    matches = SILK_MATCHER_CPU(sparse_descriptors_0_onnx, sparse_descriptors_1_onnx)
+    matches = matches[0]
+    matches = matches[matches[:, 0] >= 0]  # filter out invalid matches
 
 
     estimated_homography, mask = cv2.findHomography(
-        sparse_positions_0_onnx[matches[:, 0]][:, :2],
-        sparse_positions_1_onnx[matches[:, 1]][:, :2],
+        sparse_positions_onnx[0][matches[:, 0]][:, :2],
+        sparse_positions_onnx[1][matches[:, 1]][:, :2],
         cv2.RANSAC,
     )
     num_inliers = int(np.sum(mask))
@@ -317,8 +309,8 @@ def main():
         IMAGE_1_PATH,
         480,
         640,
-        sparse_positions_0_onnx[matches[:, 0]],
-        sparse_positions_1_onnx[matches[:, 1]],
+        sparse_positions_onnx[0][matches[:, 0]],
+        sparse_positions_onnx[1][matches[:, 1]],
     )
 
     save_image(
